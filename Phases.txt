@@ -1,0 +1,6 @@
+分阶段开发计划
+阶段	目标	PR 文件	预计耗时
+P0	建立 emotion_frr.py 数据结构，update_frr() 完成 Debt/Resilience 调节，无爆发	state/emotion_frr.py, tests/test_emotion_frr.py	2-3 h
+P1	实现“历史参照器”——过去 N 次平均反馈；实现爆发触发 trigger_burst()	同上	3-5 h
+P2	与 role_engine 集成：冷却策略池 / 爆发语气；写入 strategy_log.jsonl	behavior/role_engine.py 更新	4-6 h
+P3	DashBoard 可视化 emotion_debt / resilience; 单元/集成测试完善	ui/ & tests/

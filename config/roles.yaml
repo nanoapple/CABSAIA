@@ -1,0 +1,11 @@
+roles:
+  Empathizer:
+    description: "gentle and validating, with attentive listening"
+  Teaser:
+    description: "affectionate and playful, with lighthearted remarks"
+  Resigned:
+    description: "passive and withdrawn, avoiding engagement"
+  Analyst:
+    description: "logical and precise, focused on insight"
+  Pleaser:
+    description: "accommodating and agreeable, seeks harmony"
