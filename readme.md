@@ -42,7 +42,7 @@ requests
 PyYAML
 pytest (for running tests)
 ```
-
+---
 ## LLM backend (local Ollama)
 By default, the project is configured to use a local Ollama server.
 Install and start Ollama
@@ -54,7 +54,24 @@ ollama pull mistral
 
 ## Running
 Quick smoke run (test loop):
+```bash
 python main_test_loop.py
+```
 
 Run tests:
+```bash
 pytest -q
+```
+---
+
+## Notes
+
+1) This is not a therapeutic tool. It is a behavioural simulation sandbox.
+
+2) The “psychological realism” goal is to explore state-driven behaviour patterns, not to provide clinical advice.
+
+##Licence
+
+MIT License
+
+
