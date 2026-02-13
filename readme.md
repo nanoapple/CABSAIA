@@ -19,14 +19,16 @@ An experimental sandbox that explores psychologically grounded agent behaviour u
 ---
 
 ## Project structure
-cabsaia/
-├── processing/     # Text signals → features (e.g., valence/arousal, keywords)
-├── state/          # Internal state (FRR/emotion debt, resilience, energy) and burst logic
-├── behavior/       # Coping style selection and prompt style mapping
-├── core/           # LLM interface and prompt generation utilities
-├── tests/          # Unit tests and behavioural regression checks
-└── data/           # Experimental resources (e.g., VAD/Darwin mappings, logs)
 
+```text
+cabsaia/
+├── processing/   # Text signals → features (e.g., valence/arousal, keywords)
+├── state/        # Internal state (FRR/emotion debt, resilience, energy) and burst logic
+├── behavior/     # Coping style selection and prompt style mapping
+├── core/         # LLM interface and prompt generation utilities
+├── tests/        # Unit tests and behavioural regression checks
+└── data/         # Experimental resources (e.g., VAD/Darwin mappings, logs)
+```
 
 ---
 
@@ -70,7 +72,7 @@ pytest -q
 
 2) The “psychological realism” goal is to explore state-driven behaviour patterns, not to provide clinical advice.
 
-##Licence
+## Licence
 
 MIT License
 
