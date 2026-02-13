@@ -1,0 +1,30 @@
+cat > .gitignore << 'EOF'
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual env
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+data/Logs/
+
+# IDE / Editors
+.vscode/
+.idea/
+.trAE/
+.trae/
+.trae-cache/
+.trae-workspace/
+*.code-workspace

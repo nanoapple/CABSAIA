@@ -15,43 +15,44 @@ from typing import Dict, List
 
 from cabsaia.state.emotion_frr import FRRState
 from cabsaia.state.emotion_trigger import trigger_burst, apply_burst_recovery
+from cabsaia.emotion.emotion_profile import EmotionProfile
 
-# ──────────────────────────────────────────────────────────────────────
-# 1. Coping-Style 词典（可自行扩充）
-# ──────────────────────────────────────────────────────────────────────
+
+# Coping style 定义
 COPING_STYLES: Dict[str, Dict] = {
     "emotion_focused": {
-        "traits": ["soothing", "validating", "reassuring"],
+        "traits": ["soothing", "validating", "reassuring", "empathetic", "affirmative"],
         "preferred_debt": (0.5, 2.0),
     },
     "problem_focused": {
-        "traits": ["actionable", "directive", "solution-oriented"],
+        "traits": ["actionable", "directive", "solution-oriented", "strategic"],
         "preferred_debt": (2.0, 5.0),
     },
-    "avoidance": {  # 紧急回避
-        "traits": ["diverting", "distracting"],
+    "avoidance": {
+        "traits": ["diverting", "distracting", "avoidant", "distant", "silent"],
         "emergency": True,
+    },
+    "resentful": {
+        "traits": ["anxious", "passive-aggressive", "withdrawn", "aggressive", "disdainful"],
+        "preferred_debt": (4.0, 10.0),
+        "negative_expressions": True,
+        "breakdown_signs": True
     },
 }
 
-# Prompt 语气映射表（可配合 burst_level 使用）
 PROMPT_STYLE_MAP: Dict[str, str] = {
-    "baseline": "Calm and empathetic",
-    "mild": "Slightly assertive, but still polite",
-    "moderate": "Firm and urgent, prioritising user safety",
-    "severe": "Direct and commanding, immediate action required",
+    "baseline": "Calm and conversational",
+    "mild": "Brief, slightly irritated, but polite",
+    "moderate": "Frustrated, reactive, emotionally tired, mild anxious",
+    "severe": "Exhausted, disinterested, passive-aggressive, defensive",
 }
 
-# ──────────────────────────────────────────────────────────────────────
-# 2. RoleEngine 主体
-# ──────────────────────────────────────────────────────────────────────
+
 class RoleEngine:
     def __init__(self, state: FRRState):
         self.state = state
 
-    # ---------- 冷却 & 反馈维护 ----------
     def update_strategy_cooldown(self, strategy: str) -> None:
-        """根据近期反馈动态调整冷却期"""
         ss = self.state.strategy_state.setdefault(
             strategy, {"cooldown": 1, "recent_feedback": deque(maxlen=5)}
         )
@@ -64,12 +65,7 @@ class RoleEngine:
         elif avg < 0:
             ss["cooldown"] = max(1, ss["cooldown"] - 1)
 
-    # ---------- 风格切换抑制 ----------
     def should_switch_style(self, next_style: str) -> bool:
-        """
-        防止频繁切换；若同风格或冷却期未到，返回 False。
-        相似度可简化为文本重合率；此处示范用字符串交集长度。
-        """
         curr = self.state.last_style
         if next_style == curr:
             return False
@@ -88,11 +84,10 @@ class RoleEngine:
         union = len(set_a | set_b) or 1
         return inter / union
 
-    # ---------- Prompt 生成（带缓存） ----------
     @lru_cache(maxsize=128)
     def _build_prompt(self, coping_style: str, burst_level: str) -> str:
         traits = ", ".join(COPING_STYLES[coping_style]["traits"])
-        tone   = PROMPT_STYLE_MAP.get(burst_level, PROMPT_STYLE_MAP["baseline"])
+        tone = PROMPT_STYLE_MAP.get(burst_level, PROMPT_STYLE_MAP["baseline"])
         return (
             f"You are an AI assistant adopting a {coping_style} strategy "
             f"({traits}). Respond with a tone that is {tone}."
@@ -101,41 +96,61 @@ class RoleEngine:
     def get_prompt(self, coping_style: str, burst_level: str) -> str:
         return self._build_prompt(coping_style, burst_level)
 
-    # ---------- 主入口：根据当前状态给出 prompt ----------
+    def decide_coping_style(self, strategy: str) -> str:
+        feedback_score = self.state.recent_avg_feedback(strategy)
+        debt = self.state.emotion_debt
+        energy = self.state.energy
+
+        if debt > 3 or feedback_score < -0.8:
+            burst_level = "severe"
+        elif debt > 2.5 or feedback_score < -0.6:
+            burst_level = "moderate"
+        elif debt > 1.5 or feedback_score < -0.3:
+            burst_level = "mild"
+        else:
+            burst_level = "baseline"
+
+        if burst_level == "severe":
+            style = "resentful"  
+        elif burst_level == "moderate":
+            style = "avoidance"
+        elif burst_level == "mild":
+            style = "problem_focused"
+        else:
+            style = "emotion_focused"
+
+        # TRACE
+        print("\n🔎 [TRACE] Coping Style Decision")
+        print(f"    🧠 Feedback Avg : {feedback_score:.2f}")
+        print(f"    🔥 Emotion Debt : {debt:.2f}")
+        print(f"    ⚡️ Energy Level : {energy:.2f}")
+        print(f"    📈 Burst Level  : {burst_level}")
+        print(f"    🎭 Chosen Style : {style}\n")
+
+        self.state.last_style = style
+        return style
+
+
     def decide_and_generate_prompt(self, last_strategy: str = "reflective_listening") -> str:
-        # ① 触发爆发检测
         burst_lvl = trigger_burst(self.state, last_strategy)
         if burst_lvl:
             apply_burst_recovery(self.state, burst_lvl)
         else:
             burst_lvl = "baseline"
 
-        # ② 选择 coping_style
-        debt = self.state.emotion_debt
-        chosen_style = "emotion_focused"  # 默认
-        for style, cfg in COPING_STYLES.items():
-            if cfg.get("emergency") and burst_lvl in ("moderate", "severe"):
-                chosen_style = style
-                break
-            lo, hi = cfg.get("preferred_debt", (0, 10))
-            if lo <= debt <= hi:
-                chosen_style = style
-                break
+        style = self.decide_coping_style(last_strategy)
 
-        # ③ 风格切换抑制
-        if not self.should_switch_style(chosen_style):
-            chosen_style = self.state.last_style
+        if not self.should_switch_style(style):
+            style = self.state.last_style
 
-        # ④ 生成 prompt
-        prompt = self.get_prompt(chosen_style, burst_lvl)
-        logging.debug(f"[RoleEngine] prompt_style={chosen_style}, burst={burst_lvl}")
+        prompt = self.get_prompt(style, burst_lvl)
+        logging.debug(f"[RoleEngine] prompt_style={style}, burst={burst_lvl}")
         return prompt
 
-# 如果你希望 test_role_engine.py 能直接导入这两个函数
+
+# 测试辅助函数
 def dummy_state_for_test() -> FRRState:
-    """
-    用于测试目的创建的 FRRState 示例
-    """
+    from collections import deque
     state = FRRState()
     state.strategy_state = {
         "reflective_listening": {
@@ -144,8 +159,9 @@ def dummy_state_for_test() -> FRRState:
         }
     }
     state.last_style = "calm"
-    state.last_switch_time = time.time() - 100  # 模拟之前已切换过
+    state.last_switch_time = time.time() - 100
     return state
+
 
 __all__ = [
     "RoleEngine",

@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from cabsaia.state.emotion_debt import calculate_nonlinear_debt
+
 
 # 默认阈值基准
 BASE_THRESHOLDS = {
@@ -77,10 +79,7 @@ def update_frr(state: FRRState, strategy: str, feedback_score: float, system_ene
         "timestamp": now.timestamp()
     })
 
-    if feedback_score < 0:
-        state.emotion_debt += 1.0
-    elif feedback_score > 0:
-        state.emotion_debt = max(0.0, state.emotion_debt - 1.0)
+    state.emotion_debt = calculate_nonlinear_debt(state.emotion_debt, feedback_score)
 
     if feedback_score > 0:
         state.resilience = min(1.0, state.resilience + 0.05)

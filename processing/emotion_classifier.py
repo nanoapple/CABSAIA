@@ -1,11 +1,17 @@
+# 📁 文件路径：cabsaia/processing/emotion_classifier.py
+
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Literal
+
 from cabsaia.resources.emotion_dictionary import (
     EMOTION_KEYWORDS,
     EMOTION_INTENSITY,
     EMOTION_EXPRESSIONS,
     COUNSELING_THEMES
 )
+
+# 可能的情绪类别
+type SentimentType = Literal["positive", "negative", "neutral"]
 
 def clean_text(text: str) -> str:
     return re.sub(r'[^a-zA-Z\s]', '', text).lower()
@@ -70,3 +76,16 @@ def analyse_emotion_from_text(text: str) -> Dict[str, Any]:
         "expression": expression or "unknown",
         "intensity": intensity
     }
+
+def infer_feedback_score(text: str) -> float:
+    """
+    根据关键词情绪分析结果推断反馈分数（用于 update_frr）
+    """
+    result = analyse_emotion_from_text(text)
+    valence = result["valence"]
+    if valence > 0.3:
+        return 1.0
+    elif valence < -0.3:
+        return -1.0
+    else:
+        return 0.0
