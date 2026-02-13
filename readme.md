@@ -41,17 +41,18 @@ Minimum dependencies typically include:
 requests
 PyYAML
 pytest (for running tests)
+```
 
 ## LLM backend (local Ollama)
 By default, the project is configured to use a local Ollama server.
 Install and start Ollama
 Ensure the model is available (default: mistral):
-
+```bash
 ollama pull mistral
-
+```
 ---
 
-Running
+## Running
 Quick smoke run (test loop):
 python main_test_loop.py
 
