@@ -1,56 +1,62 @@
-"""
-role_engine.py
-──────────────
-负责 ①根据 FRRState 选择应对风格（coping style）
-    ②在爆发等级/冷却期等条件下抑制高频切换
-    ③动态维护各策略的冷却时间
-    ④生成 prompt（可缓存）供上层调用
-"""
+# 📁 文件路径：cabsaia/behavior/role_engine.py
 
 import time
 import logging
 from collections import deque
 from functools import lru_cache
-from typing import Dict, List
+from typing import Dict
 
-from cabsaia.state.emotion_frr import FRRState
-from cabsaia.state.emotion_trigger import trigger_burst, apply_burst_recovery
-from cabsaia.emotion.emotion_profile import EmotionProfile
+from state.emotion_frr import FRRState
+from state.emotion_trigger import trigger_burst, apply_burst_recovery
 
-
-# Coping style 定义
+# Coping styles: rewrite traits to be "ordinary person" rather than counsellor.
 COPING_STYLES: Dict[str, Dict] = {
     "emotion_focused": {
-        "traits": ["soothing", "validating", "reassuring", "empathetic", "affirmative"],
+        "traits": ["low-intervention", "brief", "grounded", "non-therapeutic", "boundary-aware"],
         "preferred_debt": (0.5, 2.0),
     },
     "problem_focused": {
-        "traits": ["actionable", "directive", "solution-oriented", "strategic"],
+        "traits": ["direct", "task-oriented", "efficient", "no-nonsense"],
         "preferred_debt": (2.0, 5.0),
     },
     "avoidance": {
-        "traits": ["diverting", "distracting", "avoidant", "distant", "silent"],
+        "traits": ["minimal", "withdrawn", "quiet", "disengaging"],
         "emergency": True,
     },
     "resentful": {
-        "traits": ["anxious", "passive-aggressive", "withdrawn", "aggressive", "disdainful"],
+        "traits": ["tired", "irritated", "guarded", "short", "sighing"],
         "preferred_debt": (4.0, 10.0),
-        "negative_expressions": True,
-        "breakdown_signs": True
     },
 }
 
+# Tone labels should not push "therapy language"
 PROMPT_STYLE_MAP: Dict[str, str] = {
-    "baseline": "Calm and conversational",
-    "mild": "Brief, slightly irritated, but polite",
-    "moderate": "Frustrated, reactive, emotionally tired, mild anxious",
-    "severe": "Exhausted, disinterested, passive-aggressive, defensive",
+    "baseline": "Calm, brief, neutral",
+    "mild": "Short, slightly irritated, polite",
+    "moderate": "Tired, clipped, boundary-setting",
+    "severe": "Exhausted, disengaging, minimal",
+}
+
+BURST_TO_STYLE: Dict[str, str] = {
+    "baseline": "emotion_focused",
+    "mild": "problem_focused",
+    "moderate": "avoidance",
+    "severe": "resentful",
 }
 
 
 class RoleEngine:
     def __init__(self, state: FRRState):
         self.state = state
+
+        if not hasattr(self.state, "last_burst_level"):
+            setattr(self.state, "last_burst_level", "baseline")
+        if not hasattr(self.state, "last_prompt_style"):
+            setattr(self.state, "last_prompt_style", "baseline")
+        if not hasattr(self.state, "last_style") or getattr(self.state, "last_style") not in COPING_STYLES:
+            setattr(self.state, "last_style", "emotion_focused")
+
+        self.STYLE_SWITCH_COOLDOWN_SECS = getattr(self, "STYLE_SWITCH_COOLDOWN_SECS", 60)
 
     def update_strategy_cooldown(self, strategy: str) -> None:
         ss = self.state.strategy_state.setdefault(
@@ -65,71 +71,66 @@ class RoleEngine:
         elif avg < 0:
             ss["cooldown"] = max(1, ss["cooldown"] - 1)
 
-    def should_switch_style(self, next_style: str) -> bool:
-        curr = self.state.last_style
-        if next_style == curr:
+    def should_switch_tone(self, new_tone: str) -> bool:
+        def norm(s: str | None) -> str:
+            return (s or "").strip().lower()
+
+        ns = norm(new_tone)
+        if not ns:
             return False
-        similarity = self._style_similarity(curr, next_style)
-        elapsed = time.time() - self.state.last_switch_time
-        if similarity < 0.6 and elapsed > 60:
-            self.state.last_switch_time = time.time()
-            self.state.last_style = next_style
-            return True
-        return False
 
-    @staticmethod
-    def _style_similarity(a: str, b: str) -> float:
-        set_a, set_b = set(a.split()), set(b.split())
-        inter = len(set_a & set_b)
-        union = len(set_a | set_b) or 1
-        return inter / union
+        current = norm(getattr(self.state, "last_prompt_style", "baseline"))
+        if ns == current:
+            return False
 
-    @lru_cache(maxsize=128)
-    def _build_prompt(self, coping_style: str, burst_level: str) -> str:
-        traits = ", ".join(COPING_STYLES[coping_style]["traits"])
-        tone = PROMPT_STYLE_MAP.get(burst_level, PROMPT_STYLE_MAP["baseline"])
+        cooldown = getattr(self, "switch_cooldown_secs", None) or self.STYLE_SWITCH_COOLDOWN_SECS
+        last_ts = getattr(self.state, "last_switch_time", 0.0) or 0.0
+        now = time.time()
+        return (now - float(last_ts)) >= float(cooldown)
+
+    def decide_coping_style(self, burst_level: str) -> str:
+        return BURST_TO_STYLE.get(burst_level, "emotion_focused")
+
+    def get_hard_stop_prompt(self) -> str:
+        """
+        Hard stop: user explicitly wants the agent to stop.
+        We instruct the model to produce ONE short acknowledgment and nothing else.
+        """
         return (
-            f"You are an AI assistant adopting a {coping_style} strategy "
-            f"({traits}). Respond with a tone that is {tone}."
+            "SYSTEM RULES (HARD STOP):\n"
+            "The user has explicitly told you to stop. Output ONE short sentence only.\n"
+            "Do NOT apologise. Do NOT offer help. Do NOT ask questions.\n"
+            "Do NOT use counselling language. Do NOT use emojis.\n"
+            "Allowed examples: 'Okay.' 'Understood.' 'Alright, I will stop.'\n"
+            "Now output exactly one sentence."
         )
 
-    def get_prompt(self, coping_style: str, burst_level: str) -> str:
-        return self._build_prompt(coping_style, burst_level)
+    @lru_cache(maxsize=128)
+    def _build_prompt(self, coping_style: str, tone_key: str) -> str:
+        traits = ", ".join(COPING_STYLES[coping_style]["traits"])
+        tone = PROMPT_STYLE_MAP.get(tone_key, PROMPT_STYLE_MAP["baseline"])
 
-    def decide_coping_style(self, strategy: str) -> str:
-        feedback_score = self.state.recent_avg_feedback(strategy)
-        debt = self.state.emotion_debt
-        energy = self.state.energy
+        # Hard constraints to suppress "helper/counsellor" reflex.
+        constraints = (
+            "SYSTEM RULES:\n"
+            "1) Speak like an ordinary person, not a therapist or customer support.\n"
+            "2) Be concise: baseline<=2 sentences, mild<=2, moderate<=1, severe<=1.\n"
+            "3) Do NOT say: 'safe space', 'take a deep breath', 'you're strong', 'your feelings matter', "
+            "'I'm here for you', 'one step at a time'.\n"
+            "4) Do NOT over-apologise. At most ONE apology total per conversation, and only if you truly misread intent.\n"
+            "5) No emojis.\n"
+            "6) If the user is hostile, set a boundary briefly and stop adding more.\n"
+        )
 
-        if debt > 3 or feedback_score < -0.8:
-            burst_level = "severe"
-        elif debt > 2.5 or feedback_score < -0.6:
-            burst_level = "moderate"
-        elif debt > 1.5 or feedback_score < -0.3:
-            burst_level = "mild"
-        else:
-            burst_level = "baseline"
+        style_line = (
+            f"You are an AI assistant using coping style '{coping_style}' ({traits}). "
+            f"Tone: {tone}."
+        )
 
-        if burst_level == "severe":
-            style = "resentful"  
-        elif burst_level == "moderate":
-            style = "avoidance"
-        elif burst_level == "mild":
-            style = "problem_focused"
-        else:
-            style = "emotion_focused"
+        return constraints + "\n" + style_line
 
-        # TRACE
-        print("\n🔎 [TRACE] Coping Style Decision")
-        print(f"    🧠 Feedback Avg : {feedback_score:.2f}")
-        print(f"    🔥 Emotion Debt : {debt:.2f}")
-        print(f"    ⚡️ Energy Level : {energy:.2f}")
-        print(f"    📈 Burst Level  : {burst_level}")
-        print(f"    🎭 Chosen Style : {style}\n")
-
-        self.state.last_style = style
-        return style
-
+    def get_prompt(self, coping_style: str, tone_key: str) -> str:
+        return self._build_prompt(coping_style, tone_key)
 
     def decide_and_generate_prompt(self, last_strategy: str = "reflective_listening") -> str:
         burst_lvl = trigger_burst(self.state, last_strategy)
@@ -138,34 +139,37 @@ class RoleEngine:
         else:
             burst_lvl = "baseline"
 
-        style = self.decide_coping_style(last_strategy)
+        chosen_style = self.decide_coping_style(burst_lvl)
+        self.state.last_style = chosen_style
 
-        if not self.should_switch_style(style):
-            style = self.state.last_style
+        prev_tone = getattr(self.state, "last_prompt_style", "baseline")
+        next_tone = burst_lvl
 
-        prompt = self.get_prompt(style, burst_lvl)
-        logging.debug(f"[RoleEngine] prompt_style={style}, burst={burst_lvl}")
+        if self.should_switch_tone(next_tone):
+            tone_key = next_tone
+            self.state.last_switch_time = time.time()
+            self.state.last_prompt_style = tone_key
+        else:
+            tone_key = prev_tone
+
+        self.state.last_burst_level = burst_lvl
+
+        # TRACE
+        print("\n🔎 [TRACE] Coping Style Decision")
+        try:
+            feedback_avg = self.state.recent_avg_feedback(last_strategy)
+        except Exception:
+            feedback_avg = 0.0
+        print(f"    🧠 Feedback Avg : {feedback_avg:.2f}")
+        print(f"    🔥 Emotion Debt : {getattr(self.state, 'emotion_debt', 0.0):.2f}")
+        print(f"    ⚡️ Energy Level : {getattr(self.state, 'energy', 0.0):.2f}")
+        print(f"    📈 Burst Level  : {burst_lvl}")
+        print(f"    🎭 Chosen Style : {chosen_style}")
+        print(f"    🗝️ Prompt Tone  : {tone_key}\n")
+
+        prompt = self.get_prompt(chosen_style, tone_key)
+        logging.debug(f"[RoleEngine] tone_key={tone_key}, coping_style={chosen_style}, burst={burst_lvl}")
         return prompt
 
 
-# 测试辅助函数
-def dummy_state_for_test() -> FRRState:
-    from collections import deque
-    state = FRRState()
-    state.strategy_state = {
-        "reflective_listening": {
-            "cooldown": 2,
-            "recent_feedback": deque([-1.0, -0.5, -1.0], maxlen=5)
-        }
-    }
-    state.last_style = "calm"
-    state.last_switch_time = time.time() - 100
-    return state
-
-
-__all__ = [
-    "RoleEngine",
-    "COPING_STYLES",
-    "PROMPT_STYLE_MAP",
-    "dummy_state_for_test",
-]
+__all__ = ["RoleEngine", "COPING_STYLES", "PROMPT_STYLE_MAP"]

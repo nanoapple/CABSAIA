@@ -1,7 +1,7 @@
 import requests
 import json
 import logging
-from cabsaia.config import CONFIG
+from config import CONFIG
 from typing import Optional
 
 

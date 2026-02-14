@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from statistics import pstdev
 from typing import List, Dict
 
-from cabsaia.state.emotion_frr import FRRState
+from state.emotion_frr import FRRState
 
 
 # ──────────────────────────────────────────────────────────────────────
